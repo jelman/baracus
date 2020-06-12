@@ -1,6 +1,10 @@
 import os
 import subprocess
 from subprocess import Popen, PIPE
+import pandas as pd
+import numpy as np
+import statsmodels.api as sm
+import nibabel as nb
 
 
 def run(command, env={}, ignore_errors=False):
@@ -85,3 +89,51 @@ def get_subjects_session(layout, participant_label, truly_longitudinal_study):
             freesurfer_subjects.append("sub-{sub}".format(sub=subject))
 
     return subjects_to_analyze, sessions_to_analyze, freesurfer_subjects
+
+
+
+def get_residuals(X, Y):
+    if len(Y.shape) == 1:
+        Y = np.atleast_2d(Y).T
+    betah = np.linalg.pinv(X).dot(Y)
+    Yfitted = X.dot(betah)
+    resid = Y - Yfitted
+    return np.squeeze(betah[0] + resid.values)
+    
+
+def remove_confounds(data_files, confound_file):
+    data_df = pd.DataFrame.from_dict(data_files, orient='index')
+    confounds = pd.read_csv(confound_file)
+    confounds = confounds.set_index(confounds.columns[0])
+    if  (confounds.index.isin(data_df.index)).all():
+        confounds = confounds.reindex(data_df.index)    
+    else:
+        raise Exception("Subjects in confound file and subject directory do not match. Make sure subject ID is in first column of confound file.")
+    X = confounds
+    X = sm.add_constant(X)
+    all_surfs = ['lh_thickness_file', 'rh_thickness_file', 'lh_area_file', 'rh_area_file']
+    for surf in all_surfs:
+        filelist = data_df[surf]
+        allsub_surf = []
+        for f in filelist:
+            img = nb.load(f)
+            in_data = img.get_fdata().squeeze()
+            allsub_surf.append(in_data)
+        allsub_surf = pd.DataFrame(allsub_surf)
+        surf_resid = allsub_surf.transform(lambda y: get_residuals(X,y), axis=0)
+        for i, f in enumerate(filelist):
+            out_data = surf_resid.iloc[i,:].values
+            outimg = nb.freesurfer.mghformat.MGHImage(out_data.astype(np.float32), np.eye(4))
+            nb.save(outimg, f)
+            
+    aseg_files = data_df['aseg_file']
+    allsub_aseg = pd.DataFrame()
+    for aseg_f in aseg_files:
+        aseg_df = pd.read_csv(aseg_f, index_col=0, delimiter='\t')
+        allsub_aseg = allsub_aseg.append(aseg_df)
+    aseg_resid = allsub_aseg.transform(lambda y: get_residuals(X,y), axis=0)
+    for i, f in enumerate(aseg_files):
+        out_data = aseg_resid.iloc[[i]]
+        out_data.to_csv(f, sep='\t', index=True)
+
+    

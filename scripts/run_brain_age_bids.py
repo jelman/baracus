@@ -2,15 +2,14 @@
 
 import argparse
 import os
-
 import pandas as pd
-from bids.grabbids import BIDSLayout
+from bids import BIDSLayout
 from pkg_resources import resource_filename, Requirement
 
 from baracus import models_list, __version__
 from baracus.predict import predict_brain_age_single_subject
 from baracus.prepare import run_prepare_all
-from baracus.utils import run, get_subjects_session
+from baracus.utils import run, get_subjects_session, remove_confounds
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -31,6 +30,11 @@ if __name__ == "__main__":
                                                     'provided all subjects should be analyzed. Multiple '
                                                     'participants can be specified with a space separated list.',
                         nargs="+")
+    parser.add_argument('--confound_file', help='File with variables that will be regressed out of sample data '
+                                                'before predicting brain age. The file must contain subject IDs '
+                                                'in the first column, and all remaining columns are considered '
+                                                'considered variables to regress out. The subjects in this file '
+                                                'must match the subjects in the folder. ')
     parser.add_argument('--freesurfer_dir', help="Folder with FreeSurfer subjects formatted according "
                                                  "to BIDS standard. If subject's recon-all folder "
                                                  "cannot be found, recon-all will be run. "
@@ -75,6 +79,12 @@ if __name__ == "__main__":
         data_files = run_prepare_all(args.bids_dir, freesurfer_dir, out_dir, subjects_to_analyze,
                                      sessions_to_analyze, args.n_cpus, args.license_key, args.skip_missing)
 
+### REGRESS OUT SITE HERE ###
+        if args.confound_file:
+            confound_file = args.confound_file
+            remove_confounds(data_files, confound_file)
+            
+                                
         for subject, d in data_files.items():
             d["out_dir"] = out_dir
             d["model_dir"] = model_dir
